@@ -503,3 +503,89 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void) {
+  uint64 addr;
+  int length,prot,flags,fd,offset;
+  struct file* f;
+  struct proc* p = myproc();
+  argaddr(0, &addr);
+  argint(1, &length);
+  argint(2, &prot);
+  argint(3, &flags);
+  argfd(4, &fd, &f);
+  argint(5, &offset);
+  //safety check
+  uint64 new_size = p->sz + PGROUNDUP(length);
+  if(new_size>MAXVA) return -1;
+  if(!f->readable&&(prot&PROT_READ)) return -1;
+  if(!f->writable&&(prot&PROT_WRITE)&&flags==MAP_SHARED) return -1;
+  //find a vma slot
+  for(int i=0;i<16;i++){
+    if(p->vma_array[i].valid==0){
+      p->vma_array[i].valid=1;
+      if(addr==0){
+        p->vma_array[i].address=p->sz;
+      }else{
+        p->vma_array[i].address=addr;
+      }
+      p->sz=new_size;
+      p->vma_array[i].prot=prot;
+      p->vma_array[i].flags=flags;
+      p->vma_array[i].offset=offset;
+      p->vma_array[i].fd=fd;
+      p->vma_array[i].file=f;
+      p->vma_array[i].length=length;
+      filedup(f);
+      return p->vma_array[i].address;
+    }
+  }
+  return -1;
+}
+
+uint64
+sys_munmap(void){
+  uint64 addr;
+  int length;
+  argaddr(0, &addr);
+  argint(1, &length);
+  struct proc *p = myproc();
+  struct vma* vma = 0;
+  int idx = -1;
+  // find the corresponding vma
+  for (int i = 0; i < 16; i++) {
+    if (p->vma_array[i].valid && addr >= p->vma_array[i].address
+    && addr <= p->vma_array[i].address + p->vma_array[i].length) {
+      idx = i;
+      vma = &p->vma_array[i];
+      break;
+    }
+  }
+  if (idx == -1) return -1;
+  addr = PGROUNDDOWN(addr);
+  length = PGROUNDUP(length);
+  if (vma->flags & MAP_SHARED) {
+    // write back 将区域复写回文件
+    filewrite(vma->file, addr, length);
+  }
+  uvmunmap(p->pagetable, addr, length/PGSIZE, 1);
+
+
+  if (addr == vma->address && length == vma->length) {
+    // free all vma area
+    fileclose(vma->file);
+    vma->valid = 0;
+  } else if (addr == vma->address) {
+    // free area contains head
+    vma->address += length;
+    vma->length -= length;
+    vma->offset += length;
+  } else if ((addr + length) == (vma->address + vma->length)) {
+    // free area contains tail
+    vma->length -= length;
+  } else {
+    panic("munmap neither cover begin or end of the mapped region");
+  }
+  return 0;
+}

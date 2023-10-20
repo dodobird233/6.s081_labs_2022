@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -146,6 +147,16 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  for (int i = 0; i < 16; i++) {
+    p->vma_array[i].valid  = 0;
+    p->vma_array[i].address = 0;
+    p->vma_array[i].length = 0;
+    p->vma_array[i].prot   = 0;
+    p->vma_array[i].flags  = 0;
+    p->vma_array[i].fd     = 0;
+    p->vma_array[i].offset = 0;
+    p->vma_array[i].file   = 0;
+  }
   return p;
 }
 
@@ -169,6 +180,17 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  for (int i = 0; i < 16; i++) {
+    p->vma_array[i].valid  = 0;
+    p->vma_array[i].address= 0;
+    p->vma_array[i].length = 0;
+    p->vma_array[i].prot   = 0;
+    p->vma_array[i].flags  = 0;
+    p->vma_array[i].fd     = 0;
+    p->vma_array[i].offset = 0;
+    p->vma_array[i].file   = 0;
+  }
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -319,6 +341,13 @@ fork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
+  for(int i=0;i<16;i++){
+    np->vma_array[i].valid=0;
+    if(p->vma_array[i].valid==1){
+      memmove(&np->vma_array[i],&p->vma_array[i],sizeof(struct vma));
+      filedup(p->vma_array[i].file);
+    }
+  }
   np->state = RUNNABLE;
   release(&np->lock);
 
@@ -357,6 +386,17 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  for(int i=0;i<16;i++){
+    if(p->vma_array[i].valid){
+      if(p->vma_array[i].flags & MAP_SHARED){
+        filewrite(p->vma_array[i].file,p->vma_array[i].address,p->vma_array[i].length);
+      }
+      fileclose(p->vma_array[i].file);
+      uvmunmap(p->pagetable,p->vma_array[i].address,p->vma_array[i].length/PGSIZE,1);
+      p->vma_array[i].valid=0;
     }
   }
 
